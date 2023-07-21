@@ -1,0 +1,27 @@
+#!/bin/sh
+
+# This script will be executed at every VM startup, you can place your own
+# custom commands here. This include overriding some configuration in /etc,
+# starting services etc.
+#
+# You need to make this script executable to have it enabled.
+
+# Example for overriding the whole CUPS configuration:
+#  rm -rf /etc/cups
+#  ln -s /rw/config/cups /etc/cups
+#  systemctl --no-block restart cups
+
+case $(qubesdb-read /qubes-vm-type) in
+      NetVM) file=/etc/openvpn/client/update-dnat-to-ns;;
+    ProxyVM) file=/etc/openvpn/client/update-dnat-to-ns;;
+      AppVM) file=/etc/openvpn/client/update-resolv-conf;;
+esac
+
+for f in /etc/openvpn/*.conf; do
+    sed -i "s|^up .*|up '${file} up'|g" "$f"
+    sed -i "s|^down .*|down '${file} down'|g" "$f"
+done
+
+#chown -R root:openvpn /etc/openvpn
+#chmod o-rwx o+X -R root:openvpn /etc/openvpn
+systemctl --no-block start openvpn-client@default

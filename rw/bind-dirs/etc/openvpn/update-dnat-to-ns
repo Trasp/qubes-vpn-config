@@ -1,0 +1,65 @@
+#!/bin/bash
+set -e
+
+export PATH="$PATH:/usr/sbin:/sbin"
+
+case "$1" in
+
+'test-up')
+    # Test basic VPN link, do not use beyond testing period.
+    cp /etc/resolv.conf /etc/resolv.vpnbak
+    echo "nameserver TYPE-your-nameserver-here" >/etc/resolv.conf
+    /usr/lib/qubes/qubes-setup-dnat-to-ns
+    su - -c 'notify-send "$(hostname): LINK IS UP." --icon=network-idle' user
+    exit 0
+;;
+up)
+    # To override DHCP DNS, assign static DNS addresses with 'setenv vpn_dns' in openvpn config;
+    # Format is 'X.X.X.X  Y.Y.Y.Y [...]' with quotes.
+
+    if [[ -z "${vpn_dns}" ]] ; then
+        # Parses DHCP options from openvpn to set DNS address translation:
+        for optionname in ${!foreign_option_*} ; do
+            option="${!optionname}"
+            unset fops; fops=($option)
+            if [ ${fops[1]} == "DNS" ] ; then
+                vpn_dns="${vpn_dns} ${fops[2]}"
+            fi
+        done
+    fi
+    
+    if [[ -n "${vpn_dns}" ]] ; then
+        iptables -t nat -F PR-QBS
+        # Set DNS address translation in firewall:
+        index=0
+        for tun_dns in ${vpn_dns}; do
+            case $((index++)) in
+                1) qvm_dns=$(qubesdb-read /qubes-netvm-secondary-dns);;
+                *) qvm_dns=$(qubesdb-read /qubes-netvm-primary-dns);;
+            esac
+            iptables -t nat -A PR-QBS -i vif+ -d "${qvm_dns}/32" -p udp --dport 53 -j DNAT --to "${tun_dns}"
+            #iptables -t nat -A PR-QBS -i vif+ -d "${qvm_dns}/32" -p tcp --dport 53 -j DNAT --to "${tun_dns}"
+        done
+        # Also redirect connections made to the secondary dns to the primary upstream dns when
+	# secondary upstream dns has been specified.
+        qvm_dns="$(qubesdb-read /qubes-netvm-secondary-dns)"
+        if [ -n "${qvm_dns}" ] && [ ${index} -eq 1 ]; then
+            iptables -t nat -A PR-QBS -i vif+ -d "${qvm_dns}/32" -p udp --dport 53 -j DNAT --to "${tun_dns}"
+            #iptables -t nat -A PR-QBS -i vif+ -d "${qvm_dns}/32" -p tcp --dport 53 -j DNAT --to "${tun_dns}"
+        fi
+        su - -c 'notify-send "$(hostname): Link is UP" --icon=network-idle' user &
+    else
+        su - -c 'notify-send "$(hostname): Link is UP, without DNS!" --icon=dialog-error' user &
+    fi
+;;
+down)
+    iptables -t nat -F PR-QBS
+    /usr/lib/qubes/qubes-setup-dnat-to-ns
+    su - -c 'notify-send "$(hostname): Link is DOWN" --icon=dialog-error' user &
+
+    #for x in primary secondary; do for proto in tcp udp: do
+    #    iptables -t nat -A PR-QBS -i vif+ -d $(qubesdb-read /qubes-netvm-$x-dns)/32 -p ${proto} --dport 53 -j DNAT --to $(qubesdb-read /qubes-$x-dns)
+    #done; done
+    #su - -c 'notify-send "$(hostname): Link is DOWN" --icon=dialog-error' user &
+;;
+esac
